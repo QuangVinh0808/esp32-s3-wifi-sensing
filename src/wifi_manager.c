@@ -3,6 +3,8 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "config_store.h"
+
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -271,25 +273,33 @@ static void wifi_manager_event_handler(
 esp_err_t wifi_manager_init(void)
 {
     esp_err_t err;
-    wifi_init_config_t wifi_init_config;
 
-    /*
-     * Cho phép gọi init nhiều lần mà không khởi tạo lặp.
-     */
+    wifi_init_config_t wifi_init_config =
+        WIFI_INIT_CONFIG_DEFAULT();
+
     if (s_initialized)
     {
-        ESP_LOGW(TAG, "Wi-Fi manager already initialized");
+        ESP_LOGW(
+            TAG,
+            "Wi-Fi manager already initialized"
+        );
 
         return ESP_OK;
     }
 
-    ESP_LOGI(TAG, "Initializing Wi-Fi station manager");
+    ESP_LOGI(
+        TAG,
+        "Initializing Wi-Fi station manager"
+    );
 
     s_wifi_event_group = xEventGroupCreate();
 
     if (s_wifi_event_group == NULL)
     {
-        ESP_LOGE(TAG, "Failed to create Wi-Fi event group");
+        ESP_LOGE(
+            TAG,
+            "Failed to create Wi-Fi event group"
+        );
 
         return ESP_ERR_NO_MEM;
     }
@@ -355,7 +365,7 @@ esp_err_t wifi_manager_init(void)
     /*
      * Luôn dùng WIFI_INIT_CONFIG_DEFAULT().
      */
-    wifi_init_config = WIFI_INIT_CONFIG_DEFAULT();
+    //wifi_init_config = WIFI_INIT_CONFIG_DEFAULT();
 
     err = esp_wifi_init(&wifi_init_config);
 
