@@ -1,0 +1,32 @@
+# PlatformIO build output
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# VS Code generated files
+.vscode/
+*.code-workspace
+
+# CMake build output
+build/
+cmake-build-*/
+
+# Operating system files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+*.swp
+
+# Local credentials
+secrets.h
+wifi_credentials.h
+credentials.h
+
+# Python cache, if scripts are added later
+__pycache__/
+*.pyc
