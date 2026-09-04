@@ -27,7 +27,13 @@ static const char *TAG = "CONFIG_STORE";
 
 #define MOTION_THRESHOLD_MIN     0.0f
 #define MOTION_THRESHOLD_MAX     100000.0f
+#define NVS_KEY_THRESHOLD      "thr_milli"
 
+
+// Pending credentials phục vụ đổi wifi an toàn
+#define NVS_KEY_PENDING_VALID      "pending"
+#define NVS_KEY_PENDING_SSID       "new_ssid"
+#define NVS_KEY_PENDING_PASSWORD   "new_pass"
 /*
  * NVS không hỗ trợ float trực tiếp.
  * Threshold sẽ được nhân 1000 rồi lưu bằng int32_t.
@@ -617,4 +623,390 @@ bool config_store_has_credentials(const app_config_t *config)
     return config->provisioned &&
            (ssid_length > 0) &&
            (ssid_length <= APP_WIFI_SSID_MAX_LEN);
+}
+
+esp_err_t config_store_save_pending(
+    const app_config_t *config
+)
+{
+    nvs_handle_t handle;
+    esp_err_t err;
+
+    if ((config == NULL) ||
+        !config_store_validate(config) ||
+        !config_store_has_credentials(config))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    err = nvs_open(
+        NVS_NAMESPACE,
+        NVS_READWRITE,
+        &handle
+    );
+
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Cannot open NVS for pending config: %s",
+            esp_err_to_name(err)
+        );
+
+        return err;
+    }
+
+    // Đánh dấu pending chưa hợp lệ
+    err = nvs_set_u8(
+        handle,
+        NVS_KEY_PENDING_VALID,
+        0
+    );
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    err = nvs_commit(handle);
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    /*
+     * Ghi credentials mới.
+     */
+    err = nvs_set_str(
+        handle,
+        NVS_KEY_PENDING_SSID,
+        config->ssid
+    );
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    err = nvs_set_str(
+        handle,
+        NVS_KEY_PENDING_PASSWORD,
+        config->password
+    );
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    err = nvs_commit(handle);
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    /*
+     * Chỉ đánh dấu hợp lệ sau khi hai chuỗi
+     * đã được commit thành công.
+     */
+    err = nvs_set_u8(
+        handle,
+        NVS_KEY_PENDING_VALID,
+        1
+    );
+
+    if (err != ESP_OK)
+    {
+        goto cleanup;
+    }
+
+    err = nvs_commit(handle);
+
+    if (err == ESP_OK)
+    {
+        ESP_LOGI(
+            TAG,
+            "Pending Wi-Fi configuration saved"
+        );
+    }
+
+cleanup:
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Cannot save pending config: %s",
+            esp_err_to_name(err)
+        );
+    }
+
+    nvs_close(handle);
+
+    return err;
+}
+
+esp_err_t config_store_load_pending(
+    app_config_t *config
+)
+{
+    nvs_handle_t handle;
+    esp_err_t err;
+
+    uint8_t pending_valid = 0;
+
+    char pending_ssid[
+        APP_WIFI_SSID_MAX_LEN + 1
+    ] = {0};
+
+    char pending_password[
+        APP_WIFI_PASSWORD_MAX_LEN + 1
+    ] = {0};
+
+    size_t ssid_size = sizeof(pending_ssid);
+    size_t password_size = sizeof(pending_password);
+
+    app_config_t temporary_config;
+
+    if (config == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    err = nvs_open(
+        NVS_NAMESPACE,
+        NVS_READONLY,
+        &handle
+    );
+
+    if (err == ESP_ERR_NVS_NOT_FOUND)
+    {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    err = nvs_get_u8(
+        handle,
+        NVS_KEY_PENDING_VALID,
+        &pending_valid
+    );
+
+    if ((err == ESP_ERR_NVS_NOT_FOUND) ||
+        ((err == ESP_OK) && (pending_valid == 0)))
+    {
+        nvs_close(handle);
+
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    if (err != ESP_OK)
+    {
+        nvs_close(handle);
+
+        return err;
+    }
+
+    err = nvs_get_str(
+        handle,
+        NVS_KEY_PENDING_SSID,
+        pending_ssid,
+        &ssid_size
+    );
+
+    if (err != ESP_OK)
+    {
+        nvs_close(handle);
+
+        return err == ESP_ERR_NVS_NOT_FOUND
+            ? ESP_ERR_NOT_FOUND
+            : err;
+    }
+
+    err = nvs_get_str(
+        handle,
+        NVS_KEY_PENDING_PASSWORD,
+        pending_password,
+        &password_size
+    );
+
+    nvs_close(handle);
+
+    if (err != ESP_OK)
+    {
+        return err == ESP_ERR_NVS_NOT_FOUND
+            ? ESP_ERR_NOT_FOUND
+            : err;
+    }
+
+    /*
+     * Nếu có active config thì giữ lại packet rate
+     * và threshold. Nếu không thì dùng mặc định.
+     */
+    if (config_store_load(&temporary_config) != ESP_OK)
+    {
+        config_store_set_defaults(&temporary_config);
+    }
+
+    memset(
+        temporary_config.ssid,
+        0,
+        sizeof(temporary_config.ssid)
+    );
+
+    memset(
+        temporary_config.password,
+        0,
+        sizeof(temporary_config.password)
+    );
+
+    memcpy(
+        temporary_config.ssid,
+        pending_ssid,
+        strnlen(
+            pending_ssid,
+            sizeof(pending_ssid)
+        )
+    );
+
+    memcpy(
+        temporary_config.password,
+        pending_password,
+        strnlen(
+            pending_password,
+            sizeof(pending_password)
+        )
+    );
+
+    temporary_config.version = APP_CONFIG_VERSION;
+    temporary_config.provisioned = true;
+
+    if (!config_store_validate(&temporary_config))
+    {
+        ESP_LOGE(TAG, "Pending config is invalid");
+
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    *config = temporary_config;
+
+    ESP_LOGI(TAG, "Pending Wi-Fi configuration loaded");
+
+    return ESP_OK;
+}
+
+esp_err_t config_store_erase_pending(void)
+{
+    nvs_handle_t handle;
+    esp_err_t err;
+    esp_err_t erase_err;
+
+    err = nvs_open(
+        NVS_NAMESPACE,
+        NVS_READWRITE,
+        &handle
+    );
+
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    erase_err = nvs_erase_key(
+        handle,
+        NVS_KEY_PENDING_VALID
+    );
+
+    if ((erase_err != ESP_OK) &&
+        (erase_err != ESP_ERR_NVS_NOT_FOUND))
+    {
+        nvs_close(handle);
+
+        return erase_err;
+    }
+
+    erase_err = nvs_erase_key(
+        handle,
+        NVS_KEY_PENDING_SSID
+    );
+
+    if ((erase_err != ESP_OK) &&
+        (erase_err != ESP_ERR_NVS_NOT_FOUND))
+    {
+        nvs_close(handle);
+
+        return erase_err;
+    }
+
+    erase_err = nvs_erase_key(
+        handle,
+        NVS_KEY_PENDING_PASSWORD
+    );
+
+    if ((erase_err != ESP_OK) &&
+        (erase_err != ESP_ERR_NVS_NOT_FOUND))
+    {
+        nvs_close(handle);
+
+        return erase_err;
+    }
+
+    err = nvs_commit(handle);
+
+    nvs_close(handle);
+
+    if (err == ESP_OK)
+    {
+        ESP_LOGI(TAG, "Pending configuration erased");
+    }
+
+    return err;
+}
+
+esp_err_t config_store_promote_pending(void)
+{
+    app_config_t pending_config;
+    esp_err_t err;
+
+    err = config_store_load_pending(
+        &pending_config
+    );
+
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    /*
+     * Ghi pending sang active config.
+     */
+    err = config_store_save(
+        &pending_config
+    );
+
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    /*
+     * Chỉ xóa pending sau khi active đã commit.
+     */
+    err = config_store_erase_pending();
+
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Pending configuration promoted to active"
+    );
+
+    return ESP_OK;
 }

@@ -46,4 +46,26 @@ esp_err_t config_store_erase(void);
  */
 bool config_store_has_credentials(const app_config_t *config);
 
+//Active config cũ chưa bị ghi đè
+esp_err_t config_store_save_credentials(
+    const app_config_t *config
+);
+
+esp_err_t config_store_save_pending(
+    const app_config_t *config
+);
+//Đọc pending config
+esp_err_t config_store_load_pending(
+    app_config_t *config
+);
+
+/**
+ * @brief Xóa pending config.
+ */
+esp_err_t config_store_erase_pending(void);
+
+/**
+ * @brief Chuyển pending config thành active config.
+ */
+esp_err_t config_store_promote_pending(void);
 #endif /* CONFIG_STORE_H */
