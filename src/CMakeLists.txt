@@ -4,8 +4,10 @@ idf_component_register(
         "config_store.c"
         "wifi_manager.c"
         "provisioning.c"
-    INCLUDE_DIRS
-        "."
+        "rssi_monitor.c"
+        "web_server.c"
+        "normal_services.c"
+    INCLUDE_DIRS "."
     REQUIRES
         nvs_flash
         esp_wifi
@@ -14,4 +16,5 @@ idf_component_register(
         esp_http_server
         esp_driver_gpio
         esp_system
+        esp_timer
 )

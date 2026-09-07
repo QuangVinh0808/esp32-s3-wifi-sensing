@@ -2,6 +2,8 @@
 .pio/
 .pioenvs/
 .piolibdeps/
+sdkconfig.*
+!sdkconfig.defaults
 
 # VS Code generated files
 .vscode/
