@@ -10,7 +10,7 @@
 extern "C" {
 #endif
 
-esp_err_t normal_services_start(uint16_t rssi_sample_rate_hz);
+esp_err_t normal_services_start(uint16_t csi_packet_rate_hz);
 esp_err_t normal_services_stop(void);
 bool normal_services_is_running(void);
 

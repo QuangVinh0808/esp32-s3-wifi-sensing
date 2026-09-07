@@ -1,8 +1,10 @@
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
 
 #include "app_config.h"
 #include "config_store.h"
+#include "csi_capture.h"
 #include "normal_services.h"
 #include "provisioning.h"
 #include "wifi_manager.h"
@@ -10,19 +12,30 @@
 #include "driver/gpio.h"
 #include "esp_err.h"
 #include "esp_log.h"
-#include "esp_wifi.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 static const char *TAG = "APP";
 
-#define CONFIG_BUTTON_GPIO             GPIO_NUM_0
-#define CONFIG_BUTTON_HOLD_MS          3000U
-#define NORMAL_LOOP_PERIOD_MS          50U
-#define NORMAL_STATUS_PERIOD_MS        5000U
-#define WIFI_CONNECT_TIMEOUT_MS        30000U
-#define M4_RSSI_SAMPLE_RATE_HZ         10U
+#define CONFIG_BUTTON_GPIO              GPIO_NUM_0
+#define CONFIG_BUTTON_HOLD_MS           3000U
+#define NORMAL_LOOP_PERIOD_MS           50U
+#define NORMAL_STATUS_PERIOD_MS         5000U
+#define WIFI_CONNECT_TIMEOUT_MS         30000U
+#define M5_DEFAULT_PACKET_RATE_HZ       20U
+#define M5_MAX_PACKET_RATE_HZ           100U
+
+static uint16_t sanitize_packet_rate(uint16_t packet_rate_hz)
+{
+    if ((packet_rate_hz == 0U) ||
+        (packet_rate_hz > M5_MAX_PACKET_RATE_HZ))
+    {
+        return M5_DEFAULT_PACKET_RATE_HZ;
+    }
+
+    return packet_rate_hz;
+}
 
 static void config_button_init(void)
 {
@@ -44,21 +57,11 @@ static void enter_provisioning_forever(void)
 
     if (err != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
-            "Cannot start provisioning: %s",
-            esp_err_to_name(err)
-        );
-
+        ESP_LOGE(TAG, "Cannot start provisioning: %s", esp_err_to_name(err));
         return;
     }
 
-    ESP_LOGI(
-        TAG,
-        "Provisioning AP: %s",
-        provisioning_get_ap_ssid()
-    );
-
+    ESP_LOGI(TAG, "Provisioning AP: %s", provisioning_get_ap_ssid());
     ESP_LOGI(TAG, "Open http://192.168.4.1");
 
     while (true)
@@ -72,53 +75,36 @@ static void stop_normal_mode(void)
     esp_err_t err;
 
     err = normal_services_stop();
-
     if (err != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
-            "Cannot stop normal services: %s",
-            esp_err_to_name(err)
-        );
+        ESP_LOGE(TAG, "Cannot stop normal services: %s", esp_err_to_name(err));
     }
 
     err = wifi_manager_stop();
-
     if (err != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
-            "Cannot stop Wi-Fi manager: %s",
-            esp_err_to_name(err)
-        );
+        ESP_LOGE(TAG, "Cannot stop Wi-Fi manager: %s", esp_err_to_name(err));
     }
 }
 
-static void normal_mode_loop(void)
+static void normal_mode_loop(uint16_t configured_packet_rate_hz)
 {
     TickType_t button_pressed_at = 0U;
     TickType_t last_status_at = xTaskGetTickCount();
-    const TickType_t button_hold_ticks =
-        pdMS_TO_TICKS(CONFIG_BUTTON_HOLD_MS);
+    const TickType_t button_hold_ticks = pdMS_TO_TICKS(CONFIG_BUTTON_HOLD_MS);
+    const uint16_t packet_rate_hz = sanitize_packet_rate(configured_packet_rate_hz);
+    esp_err_t err;
 
-    esp_err_t err = normal_services_start(
-        M4_RSSI_SAMPLE_RATE_HZ
-    );
-
+    err = normal_services_start(packet_rate_hz);
     if (err != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
-            "Cannot start M4 services: %s",
-            esp_err_to_name(err)
-        );
-
+        ESP_LOGE(TAG, "Cannot start M5 services: %s", esp_err_to_name(err));
         stop_normal_mode();
         enter_provisioning_forever();
         return;
     }
 
-    ESP_LOGI(TAG, "M4 dashboard is ready");
+    ESP_LOGI(TAG, "M5 CSI acquisition is ready at %u Hz", (unsigned int)packet_rate_hz);
 
     while (true)
     {
@@ -130,14 +116,9 @@ static void normal_mode_loop(void)
             {
                 button_pressed_at = now;
             }
-            else if ((now - button_pressed_at) >=
-                     button_hold_ticks)
+            else if ((now - button_pressed_at) >= button_hold_ticks)
             {
-                ESP_LOGW(
-                    TAG,
-                    "Configuration button held for 3 seconds"
-                );
-
+                ESP_LOGW(TAG, "Configuration button held for 3 seconds");
                 stop_normal_mode();
                 enter_provisioning_forever();
                 return;
@@ -148,33 +129,27 @@ static void normal_mode_loop(void)
             button_pressed_at = 0U;
         }
 
-        if (wifi_manager_get_state() ==
-            WIFI_MANAGER_STATE_FAILED)
+        if (wifi_manager_get_state() == WIFI_MANAGER_STATE_FAILED)
         {
-            ESP_LOGE(
-                TAG,
-                "Wi-Fi reconnect failed; entering provisioning"
-            );
-
+            ESP_LOGE(TAG, "Wi-Fi reconnect failed; entering provisioning");
             stop_normal_mode();
             enter_provisioning_forever();
             return;
         }
 
-        if ((now - last_status_at) >=
-            pdMS_TO_TICKS(NORMAL_STATUS_PERIOD_MS))
+        if ((now - last_status_at) >= pdMS_TO_TICKS(NORMAL_STATUS_PERIOD_MS))
         {
-            wifi_ap_record_t ap_info = {0};
+            csi_capture_stats_t stats = {0};
 
-            if (wifi_manager_get_ap_info(&ap_info) == ESP_OK)
-            {
-                ESP_LOGI(
-                    TAG,
-                    "Normal mode: RSSI=%d dBm, channel=%u",
-                    (int)ap_info.rssi,
-                    (unsigned int)ap_info.primary
-                );
-            }
+            csi_capture_get_stats(&stats);
+
+            ESP_LOGI(
+                TAG,
+                "CSI received=%" PRIu32 ", dropped=%" PRIu32 ", invalid=%" PRIu32,
+                stats.received_packets,
+                stats.dropped_packets,
+                stats.invalid_packets
+            );
 
             last_status_at = now;
         }
@@ -183,9 +158,7 @@ static void normal_mode_loop(void)
     }
 }
 
-static esp_err_t connect_with_config(
-    const app_config_t *config
-)
+static esp_err_t connect_with_config(const app_config_t *config)
 {
     esp_err_t err = wifi_manager_start(config);
 
@@ -194,9 +167,7 @@ static esp_err_t connect_with_config(
         return err;
     }
 
-    return wifi_manager_wait_connected(
-        pdMS_TO_TICKS(WIFI_CONNECT_TIMEOUT_MS)
-    );
+    return wifi_manager_wait_connected(pdMS_TO_TICKS(WIFI_CONNECT_TIMEOUT_MS));
 }
 
 void app_main(void)
@@ -215,11 +186,7 @@ void app_main(void)
 
     if (err == ESP_OK)
     {
-        ESP_LOGI(
-            TAG,
-            "Testing pending Wi-Fi configuration: %s",
-            config.ssid
-        );
+        ESP_LOGI(TAG, "Testing pending Wi-Fi configuration: %s", config.ssid);
 
         err = connect_with_config(&config);
 
@@ -229,45 +196,27 @@ void app_main(void)
 
             if (err == ESP_OK)
             {
-                ESP_LOGI(
-                    TAG,
-                    "Pending configuration promoted"
-                );
-
-                normal_mode_loop();
+                ESP_LOGI(TAG, "Pending configuration promoted");
+                normal_mode_loop(config.packet_rate_hz);
                 return;
             }
 
-            ESP_LOGE(
-                TAG,
-                "Cannot promote pending configuration: %s",
-                esp_err_to_name(err)
-            );
+            ESP_LOGE(TAG, "Cannot promote pending configuration: %s", esp_err_to_name(err));
         }
         else
         {
-            ESP_LOGE(
-                TAG,
-                "Pending configuration failed: %s",
-                esp_err_to_name(err)
-            );
+            ESP_LOGE(TAG, "Pending configuration failed: %s", esp_err_to_name(err));
         }
 
         (void)wifi_manager_stop();
         (void)config_store_erase_pending();
-
         enter_provisioning_forever();
         return;
     }
 
     if (err != ESP_ERR_NOT_FOUND)
     {
-        ESP_LOGE(
-            TAG,
-            "Cannot load pending configuration: %s",
-            esp_err_to_name(err)
-        );
-
+        ESP_LOGE(TAG, "Cannot load pending configuration: %s", esp_err_to_name(err));
         enter_provisioning_forever();
         return;
     }
@@ -276,23 +225,14 @@ void app_main(void)
 
     if (err == ESP_ERR_NOT_FOUND)
     {
-        ESP_LOGW(
-            TAG,
-            "No active configuration; entering provisioning"
-        );
-
+        ESP_LOGW(TAG, "No active configuration; entering provisioning");
         enter_provisioning_forever();
         return;
     }
 
     if (err != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
-            "Cannot load active configuration: %s",
-            esp_err_to_name(err)
-        );
-
+        ESP_LOGE(TAG, "Cannot load active configuration: %s", esp_err_to_name(err));
         enter_provisioning_forever();
         return;
     }
@@ -302,17 +242,11 @@ void app_main(void)
     if (err == ESP_OK)
     {
         ESP_LOGI(TAG, "Connected using active configuration");
-        normal_mode_loop();
+        normal_mode_loop(config.packet_rate_hz);
         return;
     }
 
-    ESP_LOGE(
-        TAG,
-        "Active Wi-Fi connection failed: %s",
-        esp_err_to_name(err)
-    );
-
+    ESP_LOGE(TAG, "Active Wi-Fi connection failed: %s", esp_err_to_name(err));
     (void)wifi_manager_stop();
-
     enter_provisioning_forever();
 }

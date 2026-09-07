@@ -1,17 +1,27 @@
 #include "normal_services.h"
 
-#include "rssi_monitor.h"
+#include "csi_capture.h"
+#include "csi_processor.h"
+#include "csi_traffic.h"
 #include "web_server.h"
 
 #include "esp_log.h"
 
 static const char *TAG = "NORMAL_SERVICES";
-
 static bool s_running = false;
 
-esp_err_t normal_services_start(uint16_t rssi_sample_rate_hz)
+static void remember_first_error(esp_err_t err, esp_err_t *first_error)
 {
-    QueueHandle_t sample_queue;
+    if ((err != ESP_OK) && (*first_error == ESP_OK))
+    {
+        *first_error = err;
+    }
+}
+
+esp_err_t normal_services_start(uint16_t csi_packet_rate_hz)
+{
+    QueueHandle_t raw_queue;
+    QueueHandle_t processed_queue;
     esp_err_t err;
 
     if (s_running)
@@ -19,88 +29,86 @@ esp_err_t normal_services_start(uint16_t rssi_sample_rate_hz)
         return ESP_OK;
     }
 
-    err = rssi_monitor_start(rssi_sample_rate_hz);
-
+    err = csi_capture_start();
     if (err != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
-            "Cannot start RSSI monitor: %s",
-            esp_err_to_name(err)
-        );
-
+        ESP_LOGE(TAG, "Cannot start CSI capture: %s", esp_err_to_name(err));
         return err;
     }
 
-    sample_queue = rssi_monitor_get_queue();
-
-    if (sample_queue == NULL)
+    raw_queue = csi_capture_get_queue();
+    if (raw_queue == NULL)
     {
-        (void)rssi_monitor_stop();
+        (void)csi_capture_stop();
         return ESP_ERR_INVALID_STATE;
     }
 
-    err = web_server_start(sample_queue);
-
+    err = csi_processor_start(raw_queue);
     if (err != ESP_OK)
     {
-        ESP_LOGE(
-            TAG,
-            "Cannot start dashboard server: %s",
-            esp_err_to_name(err)
-        );
+        ESP_LOGE(TAG, "Cannot start CSI processor: %s", esp_err_to_name(err));
+        (void)csi_capture_stop();
+        return err;
+    }
 
-        (void)rssi_monitor_stop();
+    processed_queue = csi_processor_get_queue();
+    if (processed_queue == NULL)
+    {
+        (void)csi_capture_stop();
+        (void)csi_processor_stop();
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    err = web_server_start(processed_queue);
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Cannot start dashboard: %s", esp_err_to_name(err));
+        (void)csi_capture_stop();
+        (void)csi_processor_stop();
+        return err;
+    }
+
+    err = csi_traffic_start(csi_packet_rate_hz);
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Cannot start CSI traffic: %s", esp_err_to_name(err));
+        (void)csi_capture_stop();
+        (void)csi_processor_stop();
+        (void)web_server_stop();
         return err;
     }
 
     s_running = true;
-
-    ESP_LOGI(TAG, "Normal-mode services started");
-
+    ESP_LOGI(TAG, "M5 normal-mode services started");
     return ESP_OK;
 }
 
 esp_err_t normal_services_stop(void)
 {
-    esp_err_t err;
+    esp_err_t first_error = ESP_OK;
 
     if (!s_running)
     {
         return ESP_OK;
     }
 
-    err = web_server_stop();
-
-    if (err != ESP_OK)
-    {
-        ESP_LOGE(
-            TAG,
-            "Cannot stop dashboard server: %s",
-            esp_err_to_name(err)
-        );
-
-        return err;
-    }
-
-    err = rssi_monitor_stop();
-
-    if (err != ESP_OK)
-    {
-        ESP_LOGE(
-            TAG,
-            "Cannot stop RSSI monitor: %s",
-            esp_err_to_name(err)
-        );
-
-        return err;
-    }
+    remember_first_error(csi_traffic_stop(), &first_error);
+    remember_first_error(csi_capture_stop(), &first_error);
+    remember_first_error(csi_processor_stop(), &first_error);
+    remember_first_error(web_server_stop(), &first_error);
 
     s_running = false;
 
-    ESP_LOGI(TAG, "Normal-mode services stopped");
+    if (first_error == ESP_OK)
+    {
+        ESP_LOGI(TAG, "M5 normal-mode services stopped");
+    }
+    else
+    {
+        ESP_LOGE(TAG, "One or more M5 services failed to stop: %s", esp_err_to_name(first_error));
+    }
 
-    return ESP_OK;
+    return first_error;
 }
 
 bool normal_services_is_running(void)

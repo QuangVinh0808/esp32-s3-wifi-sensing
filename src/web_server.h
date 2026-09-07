@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-esp_err_t web_server_start(QueueHandle_t sample_queue);
+esp_err_t web_server_start(QueueHandle_t csi_sample_queue);
 esp_err_t web_server_stop(void);
 bool web_server_is_running(void);
 
