@@ -1,11 +1,13 @@
 #include "csi_processor.h"
 
 #include <inttypes.h>
+#include <math.h>
 #include <stddef.h>
 #include <stdint.h>
 
 #include "csi_capture.h"
 #include "csi_types.h"
+#include "motion_detector.h"
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -49,8 +51,12 @@ static bool process_raw_sample(
     float sum_power = 0.0f;
     float min_power = 0.0f;
     float max_power = 0.0f;
+    float amplitudes[CSI_VALID_SUBCARRIER_COUNT] = {0};
+    float normalized_amplitudes[CSI_VALID_SUBCARRIER_COUNT] = {0};
+    float sum_amplitude = 0.0f;
     uint16_t valid_count = 0U;
     csi_capture_stats_t stats = {0};
+    motion_result_t motion = {0};
 
     if ((raw == NULL) || (output == NULL) || (raw->csi_len < 2U))
     {
@@ -95,13 +101,36 @@ static bool process_raw_sample(
         }
 
         sum_power += power;
+        if (valid_count < CSI_VALID_SUBCARRIER_COUNT)
+        {
+            amplitudes[valid_count] = sqrtf(power);
+            sum_amplitude += amplitudes[valid_count];
+        }
         valid_count++;
     }
 
-    if (valid_count == 0U)
+    if ((valid_count != CSI_VALID_SUBCARRIER_COUNT) ||
+        (sum_amplitude <= 0.0f))
     {
         return false;
     }
+
+    {
+        const float mean_amplitude =
+            sum_amplitude / (float)valid_count;
+
+        for (size_t index = 0U; index < valid_count; index++)
+        {
+            normalized_amplitudes[index] =
+                amplitudes[index] / mean_amplitude;
+        }
+    }
+
+    motion_detector_process(
+        normalized_amplitudes,
+        valid_count,
+        &motion
+    );
 
     csi_capture_get_stats(&stats);
 
@@ -114,6 +143,12 @@ static bool process_raw_sample(
     output->mean_power = sum_power / (float)valid_count;
     output->min_power = min_power;
     output->max_power = max_power;
+    output->motion_score = motion.score;
+    output->motion_threshold_low = motion.threshold_low;
+    output->motion_threshold_high = motion.threshold_high;
+    output->calibration_progress = motion.calibration_progress;
+    output->motion_state = motion.state;
+    output->motion_calibrated = motion.calibrated;
     output->received_packets = stats.received_packets;
     output->dropped_packets = stats.dropped_packets;
 
@@ -142,10 +177,11 @@ static void csi_processor_task(void *argument)
                 {
                     ESP_LOGI(
                         TAG,
-                        "seq=%" PRIu32 ", power=%.2f, valid=%u, dropped=%" PRIu32,
+                        "seq=%" PRIu32 ", power=%.2f, motion=%.6f, state=%s, dropped=%" PRIu32,
                         output.sequence,
                         (double)output.mean_power,
-                        (unsigned int)output.valid_subcarriers,
+                        (double)output.motion_score,
+                        motion_detector_state_name(output.motion_state),
                         output.dropped_packets
                     );
                 }
@@ -157,7 +193,10 @@ static void csi_processor_task(void *argument)
     vTaskDelete(NULL);
 }
 
-esp_err_t csi_processor_start(QueueHandle_t raw_queue)
+esp_err_t csi_processor_start(
+    QueueHandle_t raw_queue,
+    uint16_t sample_rate_hz
+)
 {
     BaseType_t task_result;
 
@@ -166,7 +205,7 @@ esp_err_t csi_processor_start(QueueHandle_t raw_queue)
         return ESP_OK;
     }
 
-    if (raw_queue == NULL)
+    if ((raw_queue == NULL) || (sample_rate_hz == 0U))
     {
         return ESP_ERR_INVALID_ARG;
     }
@@ -189,6 +228,16 @@ esp_err_t csi_processor_start(QueueHandle_t raw_queue)
     }
 
     s_raw_queue = raw_queue;
+    {
+        const esp_err_t detector_err =
+            motion_detector_configure(sample_rate_hz);
+
+        if (detector_err != ESP_OK)
+        {
+            s_raw_queue = NULL;
+            return detector_err;
+        }
+    }
     s_running = true;
 
     task_result = xTaskCreate(

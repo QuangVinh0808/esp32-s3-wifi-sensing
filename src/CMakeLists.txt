@@ -7,6 +7,7 @@ idf_component_register(
         "csi_capture.c"
         "csi_traffic.c"
         "csi_processor.c"
+        "motion_detector.c"
         "web_server.c"
         "normal_services.c"
     INCLUDE_DIRS

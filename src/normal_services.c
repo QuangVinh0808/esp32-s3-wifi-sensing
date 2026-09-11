@@ -43,7 +43,7 @@ esp_err_t normal_services_start(uint16_t csi_packet_rate_hz)
         return ESP_ERR_INVALID_STATE;
     }
 
-    err = csi_processor_start(raw_queue);
+    err = csi_processor_start(raw_queue, csi_packet_rate_hz);
     if (err != ESP_OK)
     {
         ESP_LOGE(TAG, "Cannot start CSI processor: %s", esp_err_to_name(err));

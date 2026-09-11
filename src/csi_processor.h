@@ -2,6 +2,7 @@
 #define CSI_PROCESSOR_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
@@ -11,7 +12,10 @@
 extern "C" {
 #endif
 
-esp_err_t csi_processor_start(QueueHandle_t raw_queue);
+esp_err_t csi_processor_start(
+    QueueHandle_t raw_queue,
+    uint16_t sample_rate_hz
+);
 esp_err_t csi_processor_stop(void);
 bool csi_processor_is_running(void);
 QueueHandle_t csi_processor_get_queue(void);

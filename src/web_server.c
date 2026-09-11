@@ -10,6 +10,7 @@
 
 #include "csi_types.h"
 #include "dashboard_page.h"
+#include "motion_detector.h"
 #include "wifi_manager.h"
 
 #include "esp_http_server.h"
@@ -32,7 +33,8 @@ static const char *TAG = "WEB_SERVER";
 #define WEB_STREAM_TASK_STACK_SIZE     4096U
 #define WEB_STREAM_TASK_PRIORITY       4U
 #define WEB_STREAM_STOP_WAIT_MS        1000U
-#define WEB_STREAM_JSON_SIZE           320U
+#define WEB_STREAM_MIN_PERIOD_MS        50LL
+#define WEB_STREAM_JSON_SIZE           512U
 #define STATUS_JSON_SIZE               512U
 #define ESCAPED_SSID_SIZE              193U
 
@@ -190,6 +192,14 @@ static esp_err_t websocket_handler(httpd_req_t *request)
     return ESP_OK;
 }
 
+static esp_err_t calibrate_post_handler(httpd_req_t *request)
+{
+    motion_detector_request_calibration();
+    httpd_resp_set_type(request, HTTPD_TYPE_JSON);
+    httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+    return httpd_resp_sendstr(request, "{\"accepted\":true}");
+}
+
 static void websocket_broadcast_work(void *argument)
 {
     websocket_work_t *work = (websocket_work_t *)argument;
@@ -267,6 +277,12 @@ static esp_err_t queue_sample_broadcast(const csi_processed_sample_t *sample)
         "\"mean_power\":%.2f,"
         "\"min_power\":%.2f,"
         "\"max_power\":%.2f,"
+        "\"motion_score\":%.6f,"
+        "\"threshold_low\":%.6f,"
+        "\"threshold_high\":%.6f,"
+        "\"motion_state\":\"%s\","
+        "\"calibrated\":%s,"
+        "\"calibration_progress\":%u,"
         "\"received\":%" PRIu32 ","
         "\"dropped\":%" PRIu32 "}",
         sample->timestamp_ms,
@@ -278,6 +294,12 @@ static esp_err_t queue_sample_broadcast(const csi_processed_sample_t *sample)
         (double)sample->mean_power,
         (double)sample->min_power,
         (double)sample->max_power,
+        (double)sample->motion_score,
+        (double)sample->motion_threshold_low,
+        (double)sample->motion_threshold_high,
+        motion_detector_state_name(sample->motion_state),
+        sample->motion_calibrated ? "true" : "false",
+        (unsigned int)sample->calibration_progress,
         sample->received_packets,
         sample->dropped_packets
     );
@@ -299,6 +321,8 @@ static esp_err_t queue_sample_broadcast(const csi_processed_sample_t *sample)
 
 static void web_stream_task(void *argument)
 {
+    int64_t last_broadcast_ms = 0LL;
+
     (void)argument;
 
     while (s_running)
@@ -307,11 +331,24 @@ static void web_stream_task(void *argument)
 
         if (xQueueReceive(s_sample_queue, &sample, pdMS_TO_TICKS(100U)) == pdTRUE)
         {
-            esp_err_t err = queue_sample_broadcast(&sample);
+            esp_err_t err;
+
+            if ((last_broadcast_ms != 0LL) &&
+                ((sample.timestamp_ms - last_broadcast_ms) <
+                 WEB_STREAM_MIN_PERIOD_MS))
+            {
+                continue;
+            }
+
+            err = queue_sample_broadcast(&sample);
 
             if ((err != ESP_OK) && (err != ESP_ERR_NO_MEM))
             {
                 ESP_LOGD(TAG, "Sample broadcast skipped: %s", esp_err_to_name(err));
+            }
+            else if (err == ESP_OK)
+            {
+                last_broadcast_ms = sample.timestamp_ms;
             }
         }
     }
@@ -346,6 +383,14 @@ static const httpd_uri_t WEBSOCKET_URI =
     .handle_ws_control_frames = false
 };
 
+static const httpd_uri_t CALIBRATE_URI =
+{
+    .uri = "/api/calibrate",
+    .method = HTTP_POST,
+    .handler = calibrate_post_handler,
+    .user_ctx = NULL
+};
+
 static esp_err_t register_uri_handlers(void)
 {
     esp_err_t err;
@@ -357,6 +402,12 @@ static esp_err_t register_uri_handlers(void)
     }
 
     err = httpd_register_uri_handler(s_server, &STATUS_URI);
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    err = httpd_register_uri_handler(s_server, &CALIBRATE_URI);
     if (err != ESP_OK)
     {
         return err;
