@@ -23,12 +23,13 @@ static const char *TAG = "APP";
 #define NORMAL_LOOP_PERIOD_MS           50U
 #define NORMAL_STATUS_PERIOD_MS         5000U
 #define WIFI_CONNECT_TIMEOUT_MS         30000U
+#define M5_MIN_PACKET_RATE_HZ           20U
 #define M5_DEFAULT_PACKET_RATE_HZ       20U
 #define M5_MAX_PACKET_RATE_HZ           100U
 
 static uint16_t sanitize_packet_rate(uint16_t packet_rate_hz)
 {
-    if ((packet_rate_hz == 0U) ||
+    if ((packet_rate_hz < M5_MIN_PACKET_RATE_HZ) ||
         (packet_rate_hz > M5_MAX_PACKET_RATE_HZ))
     {
         return M5_DEFAULT_PACKET_RATE_HZ;

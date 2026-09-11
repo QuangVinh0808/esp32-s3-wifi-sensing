@@ -14,6 +14,10 @@ extern "C" {
 
 typedef struct
 {
+    float fast_change;
+    float window_activity;
+    float baseline_distance;
+    float raw_score;
     float score;
     float threshold_low;
     float threshold_high;

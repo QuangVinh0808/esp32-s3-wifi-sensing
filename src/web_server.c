@@ -34,7 +34,7 @@ static const char *TAG = "WEB_SERVER";
 #define WEB_STREAM_TASK_PRIORITY       4U
 #define WEB_STREAM_STOP_WAIT_MS        1000U
 #define WEB_STREAM_MIN_PERIOD_MS        50LL
-#define WEB_STREAM_JSON_SIZE           512U
+#define WEB_STREAM_JSON_SIZE           768U
 #define STATUS_JSON_SIZE               512U
 #define ESCAPED_SSID_SIZE              193U
 
@@ -277,6 +277,10 @@ static esp_err_t queue_sample_broadcast(const csi_processed_sample_t *sample)
         "\"mean_power\":%.2f,"
         "\"min_power\":%.2f,"
         "\"max_power\":%.2f,"
+        "\"fast_change\":%.4f,"
+        "\"window_activity\":%.4f,"
+        "\"baseline_distance\":%.4f,"
+        "\"raw_motion_score\":%.4f,"
         "\"motion_score\":%.6f,"
         "\"threshold_low\":%.6f,"
         "\"threshold_high\":%.6f,"
@@ -284,7 +288,8 @@ static esp_err_t queue_sample_broadcast(const csi_processed_sample_t *sample)
         "\"calibrated\":%s,"
         "\"calibration_progress\":%u,"
         "\"received\":%" PRIu32 ","
-        "\"dropped\":%" PRIu32 "}",
+        "\"dropped\":%" PRIu32 ","
+        "\"invalid\":%" PRIu32 "}",
         sample->timestamp_ms,
         sample->sequence,
         (int)sample->rssi,
@@ -294,6 +299,10 @@ static esp_err_t queue_sample_broadcast(const csi_processed_sample_t *sample)
         (double)sample->mean_power,
         (double)sample->min_power,
         (double)sample->max_power,
+        (double)sample->fast_change,
+        (double)sample->window_activity,
+        (double)sample->baseline_distance,
+        (double)sample->raw_motion_score,
         (double)sample->motion_score,
         (double)sample->motion_threshold_low,
         (double)sample->motion_threshold_high,
@@ -301,7 +310,8 @@ static esp_err_t queue_sample_broadcast(const csi_processed_sample_t *sample)
         sample->motion_calibrated ? "true" : "false",
         (unsigned int)sample->calibration_progress,
         sample->received_packets,
-        sample->dropped_packets
+        sample->dropped_packets,
+        sample->invalid_packets
     );
 
     if ((written < 0) || ((size_t)written >= sizeof(work->payload)))

@@ -39,6 +39,10 @@ typedef struct
     float mean_power;
     float min_power;
     float max_power;
+    float fast_change; // D[n]
+    float window_activity; // V[n]
+    float baseline_distance; // B[n] 
+    float raw_motion_score;
     float motion_score;
     float motion_threshold_low;
     float motion_threshold_high;
@@ -47,6 +51,7 @@ typedef struct
     bool motion_calibrated;
     uint32_t received_packets;
     uint32_t dropped_packets;
+    uint32_t invalid_packets;
 } csi_processed_sample_t;
 
 typedef struct

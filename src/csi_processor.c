@@ -143,6 +143,10 @@ static bool process_raw_sample(
     output->mean_power = sum_power / (float)valid_count;
     output->min_power = min_power;
     output->max_power = max_power;
+    output->fast_change = motion.fast_change;
+    output->window_activity = motion.window_activity;
+    output->baseline_distance = motion.baseline_distance;
+    output->raw_motion_score = motion.raw_score;
     output->motion_score = motion.score;
     output->motion_threshold_low = motion.threshold_low;
     output->motion_threshold_high = motion.threshold_high;
@@ -151,6 +155,7 @@ static bool process_raw_sample(
     output->motion_calibrated = motion.calibrated;
     output->received_packets = stats.received_packets;
     output->dropped_packets = stats.dropped_packets;
+    output->invalid_packets = stats.invalid_packets;
 
     return true;
 }
@@ -177,9 +182,10 @@ static void csi_processor_task(void *argument)
                 {
                     ESP_LOGI(
                         TAG,
-                        "seq=%" PRIu32 ", power=%.2f, motion=%.6f, state=%s, dropped=%" PRIu32,
+                        "seq=%" PRIu32 ", fast=%.3f, window=%.3f, motion=%.3f, state=%s, dropped=%" PRIu32,
                         output.sequence,
-                        (double)output.mean_power,
+                        (double)output.fast_change,
+                        (double)output.window_activity,
                         (double)output.motion_score,
                         motion_detector_state_name(output.motion_state),
                         output.dropped_packets
